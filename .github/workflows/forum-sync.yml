@@ -1,0 +1,90 @@
+# Reusable workflow: hhftechnology/.github/.github/workflows/forum-sync.yml
+# Sends GitHub issue events to the HHF forum (Discourse Workflows webhook "W13 GitHub issue sync")
+# and, when a new forum topic is created, comments the forum link once on the issue.
+# Called from each repo's .github/workflows/forum-sync.yml. Secrets are set per repo (personal account: no org secrets).
+name: Forum sync (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      forum_host:
+        description: Only forum links on this host are posted back to GitHub.
+        type: string
+        default: forum.hhf.technology
+    secrets:
+      FORUM_SYNC_TOKEN:
+        required: true
+      FORUM_SYNC_URL:
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync:
+    # Pull requests also fire issue_comment; skip them. Skip our own bot to avoid loops.
+    if: ${{ !github.event.issue.pull_request && github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Build a trimmed payload
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          jq --arg owner "$OWNER" --arg repo "$REPO" --arg event "$EVENT" '{
+            event: $event, action: .action, owner: $owner, repo: $repo,
+            issue: {
+              number: .issue.number, title: .issue.title, body: (.issue.body // ""),
+              html_url: .issue.html_url, state: .issue.state, state_reason: .issue.state_reason,
+              labels: [.issue.labels[]?.name],
+              user: {login: .issue.user.login, type: .issue.user.type},
+              pull_request: (.issue.pull_request != null)
+            },
+            comment: (if .comment then {id: .comment.id, body: .comment.body, html_url: .comment.html_url,
+                      user: {login: .comment.user.login, type: .comment.user.type}} else null end),
+            sender: {login: .sender.login, type: .sender.type}
+          }' "$GITHUB_EVENT_PATH" > payload.json
+
+      - name: Send to the forum
+        id: send
+        env:
+          FORUM_SYNC_TOKEN: ${{ secrets.FORUM_SYNC_TOKEN }}
+          FORUM_SYNC_URL: ${{ secrets.FORUM_SYNC_URL }}
+        run: |
+          code=$(curl -sS -o resp.json -w '%{http_code}' --retry 3 --retry-delay 5 --max-time 30 \
+            -X POST "$FORUM_SYNC_URL" \
+            -H "Authorization: Bearer $FORUM_SYNC_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data-binary @payload.json) || code=000
+          echo "Forum answered HTTP $code"
+          jq -c '{ok, status, reason, topic_url}' resp.json 2>/dev/null || true
+          if [ "$code" -ge 400 ] || [ "$code" = "000" ]; then
+            echo "::error::Forum sync failed with HTTP $code"; exit 1
+          fi
+          echo "status=$(jq -r '.status // ""' resp.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "topic_url=$(jq -r '.topic_url // ""' resp.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+
+      - name: Link the forum topic on the issue (once)
+        if: >-
+          github.event_name == 'issues' && github.event.action == 'opened' &&
+          (steps.send.outputs.status == 'created' || steps.send.outputs.status == 'exists') &&
+          startsWith(steps.send.outputs.topic_url, format('https://{0}/', inputs.forum_host))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOPIC_URL: ${{ steps.send.outputs.topic_url }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh api "repos/$REPO/issues/$ISSUE/comments" --paginate --jq '.[].body' | grep -q 'hhf-forum-sync'; then
+            echo "Forum link already posted"; exit 0
+          fi
+          {
+            echo "💬 **This issue has a discussion topic on the HHF forum:** $TOPIC_URL"
+            echo
+            echo "Questions, workarounds and \"me too\" reports are welcome there. Bug status, fixes and code review stay here on GitHub."
+            echo "<!-- hhf-forum-sync -->"
+          } > body.md
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file body.md

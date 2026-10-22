@@ -1,0 +1,16 @@
+# Default issue chooser for every hhftechnology repo that has no .github/ISSUE_TEMPLATE folder of its own.
+# Blank issues stay enabled so bug reports still work; questions are pointed to the forum.
+blank_issues_enabled: true
+contact_links:
+  - name: 💬 Questions & help (HHF forum)
+    url: https://forum.hhf.technology/c/help/85
+    about: Setup questions, errors and "how do I…?" go to the forum. Every project has its own category there, and issues are mirrored to it.
+  - name: 💡 Ideas & feature requests (HHF forum)
+    url: https://forum.hhf.technology/
+    about: Discuss ideas in your project's forum category (Traefik Plugins & Tools, Pangolin & Newt Tools, Docker & Deploy Tools).
+  - name: 🗨️ Discord
+    url: https://discord.gg/HDCt9MjyMJ
+    about: Chat with the HHF community.
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/hhftechnology/.github/blob/main/SECURITY.md
+    about: Please report vulnerabilities privately, never in a public issue.
